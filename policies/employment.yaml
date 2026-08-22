@@ -1,0 +1,459 @@
+# =============================================================================
+# ##  NOT ENFORCED.  NOT VALID CERBOS.  NOT A CONTROL.  ##
+# =============================================================================
+#
+# NOTHING READS THIS FILE. There is no Cerbos process in this system, no Cerbos
+# client library in backend/package.json, and no code that opens this directory.
+# CERBOS_POLICY_DIR is dead configuration. Deleting this whole directory would
+# change the behaviour of the running system in no way whatsoever.
+#
+# WHAT ACTUALLY ENFORCES AUTHORIZATION:
+#   backend/src/authz/middleware.ts, backend/src/lib/auth.ts,
+#   backend/src/lib/access.ts, the checks inside each route handler, and
+#   PostgreSQL row-level security (migrations/033_rls_and_grants.sql).
+#   See the header of backend/src/authz/cerbos.ts.
+#
+# THIS FILE WOULD NOT LOAD EVEN IF CERBOS WERE INSTALLED. It is not valid
+# Cerbos grammar:
+#   * `kind: Policy` with `metadata:` / `spec:` is Kubernetes shape. A Cerbos
+#     v1 document has no `kind` and no `spec`; it carries exactly one of
+#     `resourcePolicy`, `principalPolicy`, `derivedRoles`, `rolePolicy`.
+#   * `spec.target` and `spec.permissions` are not Cerbos fields at all.
+#   * Effects must be `EFFECT_ALLOW` / `EFFECT_DENY`, not `ALLOW` / `DENY`.
+#   * Roles are declared as actions (`- action: self`, `- action: hr_generalist`).
+#   * `roles: ["*"]` (person.yaml "No delete allowed") is not valid — Cerbos has
+#     no wildcard role, so this document's only DENY rule would never compile,
+#     let alone fire.
+#   * `department`, `campus_ambassador` and `employee_message` are defined here
+#     AND in leave_request.yaml / additional.yaml. A Cerbos store rejects
+#     duplicate resource+version policies.
+#
+# ITS CONTENT IS ALSO STALE AND NOT LEAST-PRIVILEGE, so do not treat it as a
+# specification either:
+#   * Roles this system never derives: `platform_admin`, `manager_chain_of`.
+#     deriveRoles() (backend/src/lib/auth.ts) yields only: self, employee,
+#     department_head_of, direct_manager_of, hr_generalist, hr_restricted.
+#     Every `platform_admin` rule below is unreachable fiction.
+#   * `auditor` appears nowhere in this directory, yet it is listed in
+#     PRIVILEGED_ROLES in backend/src/lib/access.ts — so in the path that is
+#     really enforced an auditor can WRITE other people's records. The intended
+#     rule is that auditor is read-only. This directory does not express that,
+#     and could not enforce it if it did. Fix it in lib/access.ts.
+#   * `hr_generalist` is granted `actions: ["*"]` on person, employment,
+#     department, position, campus_ambassador and employee_message. That is a
+#     blanket grant, not least privilege, and it is what lib/access.ts also
+#     does today via isPrivileged().
+#   * Principal attributes referenced but populated nowhere: `direct_reports`,
+#     `chain_of_reports`, `direct_report_positions`,
+#     `chain_of_report_positions`, `headed_departments`.
+#   * `valid_period.start` / `.end` are assumed; the schema uses `system_period`.
+#
+# DOCUMENTATION CLAIMING THIS LAYER IS "VERIFIED" (docs/HUMANOS_STATUS.md) IS
+# WRONG. Correct the document; do not cite it as assurance.
+#
+# Kept, unrenamed, only as a record of design intent. If you make Cerbos real,
+# rewrite this as `resourcePolicy` + `derivedRoles` documents and delete this
+# banner in the same change — never before.
+# =============================================================================
+
+# ============================================================
+# employment.yaml
+# ============================================================
+apiVersion: "api.cerbos.dev/v1"
+kind: Policy
+metadata:
+  name: employment
+  namespace: edurankai
+spec:
+  target: employment
+  permissions:
+    - action: read
+      effect: ALLOW
+    - action: create
+      effect: ALLOW
+    - action: update
+      effect: ALLOW
+    - action: delete
+      effect: DENY
+    - action: self
+      effect: ALLOW
+    - action: direct_manager_of
+      effect: ALLOW
+    - action: manager_chain_of
+      effect: ALLOW
+    - action: hr_generalist
+      effect: ALLOW
+    - action: platform_admin
+      effect: ALLOW
+    - action: hr_restricted
+      effect: ALLOW
+  rules:
+    # Self can read own employment
+    - description: "Self read employment"
+      effect: ALLOW
+      actions: ["read"]
+      roles: ["self"]
+      condition:
+        match:
+          expr: "request.resource.attr.person_id == request.principal.id"
+    # Direct manager can read direct reports
+    - description: "Direct manager read"
+      effect: ALLOW
+      actions: ["read"]
+      roles: ["direct_manager_of"]
+      condition:
+        match:
+          expr: |
+            request.resource.attr.person_id in request.principal.attr.direct_reports &&
+            request.context.date >= request.resource.attr.valid_period.start &&
+            request.context.date <= request.resource.attr.valid_period.end
+    # Manager chain
+    - description: "Manager chain read"
+      effect: ALLOW
+      actions: ["read"]
+      roles: ["manager_chain_of"]
+      condition:
+        match:
+          expr: |
+            request.resource.attr.person_id in request.principal.attr.chain_of_reports &&
+            request.context.date >= request.resource.attr.valid_period.start &&
+            request.context.date <= request.resource.attr.valid_period.end
+    # HR generalist full access
+    - description: "HR generalist full access"
+      effect: ALLOW
+      actions: ["*"]
+      roles: ["hr_generalist"]
+    # Platform admin full access
+    - description: "Platform admin full access"
+      effect: ALLOW
+      actions: ["*"]
+      roles: ["platform_admin"]
+    # HR restricted subject-scoped
+    - description: "HR restricted subject-scoped"
+      effect: ALLOW
+      actions: ["read"]
+      roles: ["hr_restricted"]
+      condition:
+        match:
+          expr: "request.resource.attr.person_id == request.principal.id"
+
+---
+# ============================================================
+# person.yaml
+# ============================================================
+apiVersion: "api.cerbos.dev/v1"
+kind: Policy
+metadata:
+  name: person
+  namespace: edurankai
+spec:
+  target: person
+  permissions:
+    - action: read
+      effect: ALLOW
+    - action: create
+      effect: ALLOW
+    - action: update
+      effect: ALLOW
+    - action: delete
+      effect: DENY
+    - action: self
+      effect: ALLOW
+    - action: direct_manager_of
+      effect: ALLOW
+    - action: manager_chain_of
+      effect: ALLOW
+    - action: hr_generalist
+      effect: ALLOW
+    - action: platform_admin
+      effect: ALLOW
+    - action: hr_restricted
+      effect: ALLOW
+  rules:
+    # Self can always read own record
+    - description: "Self read"
+      effect: ALLOW
+      actions: ["read"]
+      roles: ["self"]
+      condition:
+        match:
+          expr: "request.resource.attr.logical_id == request.principal.id"
+    # Direct manager
+    - description: "Direct manager read"
+      effect: ALLOW
+      actions: ["read"]
+      roles: ["direct_manager_of"]
+      condition:
+        match:
+          expr: "request.resource.attr.logical_id in request.principal.attr.direct_reports"
+    # Manager chain
+    - description: "Manager chain read"
+      effect: ALLOW
+      actions: ["read"]
+      roles: ["manager_chain_of"]
+      condition:
+        match:
+          expr: "request.resource.attr.logical_id in request.principal.attr.chain_of_reports"
+    # HR generalist
+    - description: "HR generalist full access"
+      effect: ALLOW
+      actions: ["*"]
+      roles: ["hr_generalist"]
+    # Platform admin
+    - description: "Platform admin full access"
+      effect: ALLOW
+      actions: ["*"]
+      roles: ["platform_admin"]
+    # HR restricted subject-scoped
+    - description: "HR restricted subject-scoped"
+      effect: ALLOW
+      actions: ["read"]
+      roles: ["hr_restricted"]
+      condition:
+        match:
+          expr: "request.resource.attr.logical_id == request.principal.id"
+    # No one can delete persons (immutable)
+    - description: "No delete allowed"
+      effect: DENY
+      actions: ["delete"]
+      roles: ["*"]
+
+---
+# ============================================================
+# department.yaml
+# ============================================================
+apiVersion: "api.cerbos.dev/v1"
+kind: Policy
+metadata:
+  name: department
+  namespace: edurankai
+spec:
+  target: department
+  permissions:
+    - action: read
+      effect: ALLOW
+    - action: create
+      effect: ALLOW
+    - action: update
+      effect: ALLOW
+    - action: delete
+      effect: DENY
+    - action: self
+      effect: ALLOW
+    - action: department_head_of
+      effect: ALLOW
+    - action: hr_generalist
+      effect: ALLOW
+    - action: platform_admin
+      effect: ALLOW
+    - action: hr_restricted
+      effect: ALLOW
+  rules:
+    - description: "Self access"
+      effect: ALLOW
+      actions: ["read"]
+      roles: ["self"]
+    - description: "Department head access"
+      effect: ALLOW
+      actions: ["read", "write"]
+      roles: ["department_head_of"]
+      condition:
+        match:
+          expr: "request.resource.attr.head_of_department_id == request.principal.id"
+    - description: "HR generalist full access"
+      effect: ALLOW
+      actions: ["*"]
+      roles: ["hr_generalist"]
+    - description: "Platform admin full access"
+      effect: ALLOW
+      actions: ["*"]
+      roles: ["platform_admin"]
+    - description: "HR restricted subject-scoped"
+      effect: ALLOW
+      actions: ["read"]
+      roles: ["hr_restricted"]
+      condition:
+        match:
+          expr: "request.resource.attr.person_id == request.principal.id"
+
+---
+# ============================================================
+# position.yaml
+# ============================================================
+apiVersion: "api.cerbos.dev/v1"
+kind: Policy
+metadata:
+  name: position
+  namespace: edurankai
+spec:
+  target: position
+  permissions:
+    - action: read
+      effect: ALLOW
+    - action: create
+      effect: ALLOW
+    - action: update
+      effect: ALLOW
+    - action: delete
+      effect: DENY
+    - action: self
+      effect: ALLOW
+    - action: direct_manager_of
+      effect: ALLOW
+    - action: manager_chain_of
+      effect: ALLOW
+    - action: hr_generalist
+      effect: ALLOW
+    - action: platform_admin
+      effect: ALLOW
+    - action: hr_restricted
+      effect: ALLOW
+  rules:
+    - description: "Self access"
+      effect: ALLOW
+      actions: ["read"]
+      roles: ["self"]
+    - description: "Direct manager read"
+      effect: ALLOW
+      actions: ["read"]
+      roles: ["direct_manager_of"]
+      condition:
+        match:
+          expr: "request.resource.attr.logical_id in request.principal.attr.direct_report_positions"
+    - description: "Manager chain read"
+      effect: ALLOW
+      actions: ["read"]
+      roles: ["manager_chain_of"]
+      condition:
+        match:
+          expr: "request.resource.attr.logical_id in request.principal.attr.chain_of_report_positions"
+    - description: "HR generalist full access"
+      effect: ALLOW
+      actions: ["*"]
+      roles: ["hr_generalist"]
+    - description: "Platform admin full access"
+      effect: ALLOW
+      actions: ["*"]
+      roles: ["platform_admin"]
+    - description: "HR restricted subject-scoped"
+      effect: ALLOW
+      actions: ["read"]
+      roles: ["hr_restricted"]
+      condition:
+        match:
+          expr: "request.resource.attr.person_id == request.principal.id"
+
+---
+# ============================================================
+# campus_ambassador.yaml
+# ============================================================
+apiVersion: "api.cerbos.dev/v1"
+kind: Policy
+metadata:
+  name: campus_ambassador
+  namespace: edurankai
+spec:
+  target: campus_ambassador
+  permissions:
+    - action: read
+      effect: ALLOW
+    - action: create
+      effect: ALLOW
+    - action: update
+      effect: ALLOW
+    - action: delete
+      effect: DENY
+    - action: self
+      effect: ALLOW
+    - action: hr_generalist
+      effect: ALLOW
+    - action: platform_admin
+      effect: ALLOW
+    - action: hr_restricted
+      effect: ALLOW
+  rules:
+    - description: "Self access"
+      effect: ALLOW
+      actions: ["read"]
+      roles: ["self"]
+      condition:
+        match:
+          expr: "request.resource.attr.person_id == request.principal.id"
+    - description: "HR generalist full access"
+      effect: ALLOW
+      actions: ["*"]
+      roles: ["hr_generalist"]
+    - description: "Platform admin full access"
+      effect: ALLOW
+      actions: ["*"]
+      roles: ["platform_admin"]
+    - description: "HR restricted subject-scoped"
+      effect: ALLOW
+      actions: ["read"]
+      roles: ["hr_restricted"]
+      condition:
+        match:
+          expr: "request.resource.attr.person_id == request.principal.id"
+
+---
+# ============================================================
+# employee_message.yaml
+# ============================================================
+apiVersion: "api.cerbos.dev/v1"
+kind: Policy
+metadata:
+  name: employee_message
+  namespace: edurankai
+spec:
+  target: employee_message
+  permissions:
+    - action: read
+      effect: ALLOW
+    - action: create
+      effect: ALLOW
+    - action: update
+      effect: DENY
+    - action: delete
+      effect: DENY
+    - action: self
+      effect: ALLOW
+    - action: direct_manager_of
+      effect: ALLOW
+    - action: manager_chain_of
+      effect: ALLOW
+    - action: hr_generalist
+      effect: ALLOW
+    - action: platform_admin
+      effect: ALLOW
+    - action: hr_restricted
+      effect: ALLOW
+  rules:
+    - description: "Sender/recipient can read"
+      effect: ALLOW
+      actions: ["read"]
+      roles: ["self"]
+      condition:
+        match:
+          expr: "request.resource.attr.sender_id == request.principal.id || request.resource.attr.recipient_id == request.principal.id"
+    - description: "Sender can create"
+      effect: ALLOW
+      actions: ["create"]
+      roles: ["self"]
+      condition:
+        match:
+          expr: "request.resource.attr.sender_id == request.principal.id"
+    - description: "HR generalist full access"
+      effect: ALLOW
+      actions: ["*"]
+      roles: ["hr_generalist"]
+    - description: "Platform admin full access"
+      effect: ALLOW
+      actions: ["*"]
+      roles: ["platform_admin"]
+    - description: "HR restricted subject-scoped"
+      effect: ALLOW
+      actions: ["read"]
+      roles: ["hr_restricted"]
+      condition:
+        match:
+          expr: "request.resource.attr.recipient_id == request.principal.id"

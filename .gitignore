@@ -1,0 +1,98 @@
+# ---------------------------------------------------------------------------
+# This repository had NO .gitignore at all until 2026-08-22, and backend/.env
+# was sitting in the tree with a guessable JWT_SECRET and a passwordless
+# superuser DATABASE_URL. Adding this file does NOT remove anything already
+# committed: if a .git directory is ever created around this tree, treat every
+# secret that was in it as compromised and rotate it first.
+# ---------------------------------------------------------------------------
+
+# --- secrets and local configuration ---------------------------------------
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+.secrets/
+.npmrc
+.pgpass
+
+# --- dependencies ----------------------------------------------------------
+node_modules
+node_modules/
+.pnp
+.pnp.js
+.yarn/cache
+.yarn/install-state.gz
+
+# --- build output ----------------------------------------------------------
+dist
+dist/
+build/
+out/
+.vite/
+.tsbuildinfo
+*.tsbuildinfo
+
+# --- logs and runtime noise ------------------------------------------------
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+server.log
+server_dev.log
+server_prod.log
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# --- test and coverage output ----------------------------------------------
+coverage/
+.nyc_output/
+*.lcov
+test-results/
+playwright-report/
+.vitest/
+
+# --- database and backup artefacts -----------------------------------------
+*.dump
+*.sql.gz
+*.bak
+pg_backup/
+backups/
+
+# --- editors and tooling ---------------------------------------------------
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.sample.json
+*.swp
+*.swo
+*~
+.history/
+.eslintcache
+.prettiercache
+
+# --- operating system ------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# --- local scratch ---------------------------------------------------------
+tmp/
+temp/
+.cache/
+*.local

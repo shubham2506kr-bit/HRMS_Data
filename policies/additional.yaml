@@ -1,0 +1,217 @@
+# =============================================================================
+# ##  NOT ENFORCED.  NOT VALID CERBOS.  NOT A CONTROL.  ##
+# =============================================================================
+#
+# NOTHING READS THIS FILE. There is no Cerbos process in this system, no Cerbos
+# client library in backend/package.json, and no code that opens this directory.
+# CERBOS_POLICY_DIR is dead configuration. Deleting this whole directory would
+# change the behaviour of the running system in no way whatsoever.
+#
+# WHAT ACTUALLY ENFORCES AUTHORIZATION:
+#   backend/src/authz/middleware.ts, backend/src/lib/auth.ts,
+#   backend/src/lib/access.ts, the checks inside each route handler, and
+#   PostgreSQL row-level security (migrations/033_rls_and_grants.sql).
+#   See the header of backend/src/authz/cerbos.ts.
+#
+# THIS FILE WOULD NOT LOAD EVEN IF CERBOS WERE INSTALLED. It is not valid
+# Cerbos grammar, and it is the least valid file in the directory:
+#   * `kind: Policy` with `metadata:` / `spec:` is Kubernetes shape. A Cerbos
+#     v1 document has no `kind` and no `spec`.
+#   * `spec.target` and `spec.permissions` are not Cerbos fields.
+#   * Effects must be `EFFECT_ALLOW` / `EFFECT_DENY`, not `ALLOW` / `DENY`.
+#   * `cerbos.check_permission(...)` in the role_combination rule DOES NOT EXIST.
+#     There is no such CEL function, and policies cannot recursively evaluate
+#     themselves. That rule — the one purporting to define how multiple roles
+#     combine — is the clearest example of a control that was written down and
+#     never once executed.
+#   * `role_combination` and `department_head_of` are modelled as RESOURCES.
+#     They are role concepts; in real Cerbos they belong in a `derivedRoles`
+#     document, not a `resourcePolicy`.
+#   * `campus_ambassador` and `employee_message` are duplicated verbatim from
+#     employment.yaml. A Cerbos store rejects duplicate resource+version
+#     policies, so this file would break the store even if the syntax were fixed.
+#
+# ITS CONTENT IS ALSO STALE AND NOT LEAST-PRIVILEGE:
+#   * `platform_admin` is granted `actions: ["*"]` and is never derived by
+#     deriveRoles() (backend/src/lib/auth.ts), which yields only: self,
+#     employee, department_head_of, direct_manager_of, hr_generalist,
+#     hr_restricted.
+#   * `auditor` appears nowhere in this directory, yet PRIVILEGED_ROLES in
+#     backend/src/lib/access.ts includes it, so in the enforced path an auditor
+#     can write other people's records. The intent is that auditor is read-only;
+#     enforce that in lib/access.ts, not here.
+#   * `hr_generalist` gets a blanket `["*"]` on employee_message, i.e. HR can
+#     read private employee-to-employee messages with no purpose limitation.
+#     That is a real design decision hiding in an unenforced file — decide it
+#     deliberately in the message route, or drop the claim.
+#   * `headed_departments` is a principal attribute that is populated nowhere.
+#
+# DOCUMENTATION CLAIMING THIS LAYER IS "VERIFIED" (docs/HUMANOS_STATUS.md) IS
+# WRONG. Correct the document; do not cite it as assurance.
+#
+# Kept, unrenamed, only as a record of design intent. If you make Cerbos real,
+# rewrite this as `resourcePolicy` + `derivedRoles` documents and delete this
+# banner in the same change — never before.
+# =============================================================================
+
+# ============================================================
+# role_combination.yaml
+# ============================================================
+apiVersion: "api.cerbos.dev/v1"
+kind: Policy
+metadata:
+  name: role_combination_semantics
+  namespace: edurankai
+spec:
+  target: role_combination
+  permissions:
+    - action: read
+      effect: ALLOW
+    - action: write
+      effect: ALLOW
+  rules:
+    # Union of permissions model
+    - description: "Union of permissions - any role grants access"
+      effect: ALLOW
+      actions: ["*"]
+      condition:
+        match:
+          expr: |
+            request.principal.roles.exists(role, cerbos.check_permission(request.resource.kind, request.action, role, request.context))
+
+---
+# ============================================================
+# department_head_of.yaml
+# ============================================================
+apiVersion: "api.cerbos.dev/v1"
+kind: Policy
+metadata:
+  name: department_head_of
+  namespace: edurankai
+spec:
+  target: department_head_of
+  permissions:
+    - action: read
+      effect: ALLOW
+    - action: write
+      effect: ALLOW
+  rules:
+    # Department head can access department resources
+    - description: "Department head access"
+      effect: ALLOW
+      actions: ["*"]
+      roles: ["department_head_of"]
+      condition:
+        match:
+          expr: "request.resource.attr.department_id in request.principal.attr.headed_departments"
+
+---
+# ============================================================
+# campus_ambassador.yaml
+# ============================================================
+apiVersion: "api.cerbos.dev/v1"
+kind: Policy
+metadata:
+  name: campus_ambassador
+  namespace: edurankai
+spec:
+  target: campus_ambassador
+  permissions:
+    - action: read
+      effect: ALLOW
+    - action: create
+      effect: ALLOW
+    - action: update
+      effect: ALLOW
+    - action: delete
+      effect: DENY
+    - action: self
+      effect: ALLOW
+    - action: hr_generalist
+      effect: ALLOW
+    - action: platform_admin
+      effect: ALLOW
+    - action: hr_restricted
+      effect: ALLOW
+  rules:
+    - description: "Self access"
+      effect: ALLOW
+      actions: ["read"]
+      roles: ["self"]
+      condition:
+        match:
+          expr: "request.resource.attr.person_id == request.principal.id"
+    - description: "HR generalist full access"
+      effect: ALLOW
+      actions: ["*"]
+      roles: ["hr_generalist"]
+    - description: "Platform admin full access"
+      effect: ALLOW
+      actions: ["*"]
+      roles: ["platform_admin"]
+    - description: "HR restricted subject-scoped"
+      effect: ALLOW
+      actions: ["read"]
+      roles: ["hr_restricted"]
+      condition:
+        match:
+          expr: "request.resource.attr.person_id == request.principal.id"
+
+---
+# ============================================================
+# employee_message.yaml
+# ============================================================
+apiVersion: "api.cerbos.dev/v1"
+kind: Policy
+metadata:
+  name: employee_message
+  namespace: edurankai
+spec:
+  target: employee_message
+  permissions:
+    - action: read
+      effect: ALLOW
+    - action: create
+      effect: ALLOW
+    - action: update
+      effect: DENY
+    - action: delete
+      effect: DENY
+    - action: self
+      effect: ALLOW
+    - action: hr_generalist
+      effect: ALLOW
+    - action: platform_admin
+      effect: ALLOW
+    - action: hr_restricted
+      effect: ALLOW
+  rules:
+    - description: "Sender/recipient can read"
+      effect: ALLOW
+      actions: ["read"]
+      roles: ["self"]
+      condition:
+        match:
+          expr: "request.resource.attr.sender_id == request.principal.id || request.resource.attr.recipient_id == request.principal.id"
+    - description: "Sender can create"
+      effect: ALLOW
+      actions: ["create"]
+      roles: ["self"]
+      condition:
+        match:
+          expr: "request.resource.attr.sender_id == request.principal.id"
+    - description: "HR generalist full access"
+      effect: ALLOW
+      actions: ["*"]
+      roles: ["hr_generalist"]
+    - description: "Platform admin full access"
+      effect: ALLOW
+      actions: ["*"]
+      roles: ["platform_admin"]
+    - description: "HR restricted subject-scoped"
+      effect: ALLOW
+      actions: ["read"]
+      roles: ["hr_restricted"]
+      condition:
+        match:
+          expr: "request.resource.attr.recipient_id == request.principal.id"

@@ -1,0 +1,249 @@
+# =============================================================================
+# ##  NOT ENFORCED.  NOT VALID CERBOS.  NOT A CONTROL.  ##
+# ##  DO NOT CITE THIS FILE AS THE PROTECTION FOR HEALTH DATA.  ##
+# =============================================================================
+#
+# This is the most dangerous file in this directory, because it looks like the
+# access control over special-category health data and it is not. It reads as if
+# health records were locked to the data subject. NOTHING BELOW IS EVALUATED.
+#
+# NOTHING READS THIS FILE. There is no Cerbos process in this system, no Cerbos
+# client library in backend/package.json, and no code that opens this directory.
+# CERBOS_POLICY_DIR is dead configuration.
+#
+# WHAT ACTUALLY DECIDES WHO SEES HEALTH DATA:
+#   backend/src/authz/middleware.ts, backend/src/lib/access.ts, the checks
+#   inside the health/care route handlers, and PostgreSQL row-level security
+#   (migrations/033_rls_and_grants.sql). Whatever those do is what happens.
+#   If they permit a general HR user to read a health record, this file will not
+#   stop them. See the header of backend/src/authz/cerbos.ts.
+#
+# THIS FILE WOULD NOT LOAD EVEN IF CERBOS WERE INSTALLED. It is not valid
+# Cerbos grammar:
+#   * `kind: Policy` with `metadata:` / `spec:` is Kubernetes shape. A Cerbos
+#     v1 document has no `kind` and no `spec`.
+#   * `spec.target` and `spec.permissions` are not Cerbos fields.
+#   * Effects must be `EFFECT_ALLOW` / `EFFECT_DENY`, not `ALLOW` / `DENY`.
+#   * `roles: ["*"]` is not valid Cerbos. Both catch-all DENY rules in this file
+#     — health_record "No other access" and the audit_log provisional deny —
+#     depend on constructs that would not compile. The one guarantee this file
+#     appears to make is the one it is least capable of making.
+#   * Roles are declared as actions (`- action: self`, `- action: health_service`).
+#
+# ITS CONTENT IS ALSO STALE, so do not treat it as a specification either:
+#   * `health_service` and `system` are not roles this system derives.
+#     deriveRoles() (backend/src/lib/auth.ts) yields only: self, employee,
+#     department_head_of, direct_manager_of, hr_generalist, hr_restricted.
+#   * `platform_admin` is granted read on health_access_log below and is also
+#     never derived — but note the comment in backend/src/lib/access.ts stating
+#     platform_admin is derived for every account holder. If that ever becomes
+#     true, this rule exposes the health access trail to everyone. Do not
+#     reintroduce it.
+#   * CONSENT IS NOT MODELLED AT ALL in the health_record rules. Reading a health
+#     record is gated here on identity only; there is no reference to an active,
+#     unwithdrawn health.health_consents row, and no purpose limitation. Consent
+#     enforcement must live in the route/DB layer, and must be verified there.
+#   * The audit_log "provisional deny" of self-read is an unresolved legal
+#     question (GDPR Art. 15 / DPDP), not an implemented decision.
+#
+# INTENT THAT IS NOT ENFORCED HERE AND MUST BE ENFORCED IN CODE:
+#   1. Health data is not visible to general HR. hr_generalist / hr_restricted
+#      must have no read path to health.health_records.
+#   2. auditor is READ-ONLY, and has no access to health content — only to the
+#      fact that an access occurred (health_access_log).
+#   3. Every read of health data writes a health_access_log row, fail-closed.
+#
+# DOCUMENTATION CLAIMING THIS LAYER IS "VERIFIED" (docs/HUMANOS_STATUS.md) IS
+# WRONG. Correct the document; do not cite it as assurance.
+#
+# Kept, unrenamed, only as a record of design intent. If you make Cerbos real,
+# rewrite this as `resourcePolicy` + `derivedRoles` documents and delete this
+# banner in the same change — never before.
+# =============================================================================
+
+# ============================================================
+# audit_log.yaml
+# ============================================================
+apiVersion: "api.cerbos.dev/v1"
+kind: Policy
+metadata:
+  name: audit_log
+  namespace: edurankai
+spec:
+  target: audit_log
+  permissions:
+    - action: read
+      effect: ALLOW
+    - action: create
+      effect: ALLOW
+    - action: update
+      effect: DENY
+    - action: delete
+      effect: DENY
+    - action: self
+      effect: ALLOW
+    - action: hr_generalist
+      effect: ALLOW
+    - action: platform_admin
+      effect: ALLOW
+    - action: hr_restricted
+      effect: ALLOW
+  rules:
+    # Provisional deny for employee self-read of own audit trail
+    # Per §8: provisional deny in force; needs legal counsel (GDPR/DPDP)
+    - description: "Provisional deny: employee self-read of audit trail"
+      effect: DENY
+      actions: ["read"]
+      roles: ["self"]
+      condition:
+        match:
+          expr: |
+            request.resource.attr.person_id == request.principal.id &&
+            request.resource.attr.action != "self_read"
+    # HR generalist can read all audit logs
+    - description: "HR generalist full audit access"
+      effect: ALLOW
+      actions: ["read"]
+      roles: ["hr_generalist"]
+    # Platform admin full access
+    - description: "Platform admin full audit access"
+      effect: ALLOW
+      actions: ["read"]
+      roles: ["platform_admin"]
+    # HR restricted subject-scoped
+    - description: "HR restricted subject-scoped audit access"
+      effect: ALLOW
+      actions: ["read"]
+      roles: ["hr_restricted"]
+      condition:
+        match:
+          expr: "request.resource.attr.person_id == request.principal.id"
+    # System can write audit logs
+    - description: "System writes audit logs"
+      effect: ALLOW
+      actions: ["create"]
+      roles: ["system"]
+
+---
+# ============================================================
+# health_record.yaml (BLOCKED - Section 6)
+# ============================================================
+apiVersion: "api.cerbos.dev/v1"
+kind: Policy
+metadata:
+  name: health_record
+  namespace: edurankai
+spec:
+  target: health_record
+  permissions:
+    - action: read
+      effect: ALLOW
+    - action: create
+      effect: DENY
+    - action: update
+      effect: DENY
+    - action: delete
+      effect: DENY
+    - action: self
+      effect: ALLOW
+    - action: health_service
+      effect: ALLOW
+  rules:
+    # Subject-only access - only the subject can read their own health records
+    - description: "Subject-only read access"
+      effect: ALLOW
+      actions: ["read"]
+      roles: ["self"]
+      condition:
+        match:
+          expr: "request.resource.attr.person_id == request.principal.id"
+    # Health service (subject-scoped connection) can read/write
+    - description: "Health service full access"
+      effect: ALLOW
+      actions: ["read", "create", "update"]
+      roles: ["health_service"]
+    # No one else can access health records
+    - description: "No other access"
+      effect: DENY
+      actions: ["*"]
+      roles: ["*"]
+
+---
+# ============================================================
+# health_consent.yaml
+# ============================================================
+apiVersion: "api.cerbos.dev/v1"
+kind: Policy
+metadata:
+  name: health_consent
+  namespace: edurankai
+spec:
+  target: health_consent
+  permissions:
+    - action: read
+      effect: ALLOW
+    - action: create
+      effect: ALLOW
+    - action: update
+      effect: ALLOW
+    - action: delete
+      effect: ALLOW
+    - action: self
+      effect: ALLOW
+    - action: health_service
+      effect: ALLOW
+  rules:
+    - description: "Subject can manage own consent"
+      effect: ALLOW
+      actions: ["read", "create", "update", "delete"]
+      roles: ["self"]
+      condition:
+        match:
+          expr: "request.resource.attr.person_id == request.principal.id"
+    - description: "Health service full access"
+      effect: ALLOW
+      actions: ["*"]
+      roles: ["health_service"]
+
+---
+# ============================================================
+# health_access_log.yaml
+# ============================================================
+apiVersion: "api.cerbos.dev/v1"
+kind: Policy
+metadata:
+  name: health_access_log
+  namespace: edurankai
+spec:
+  target: health_access_log
+  permissions:
+    - action: read
+      effect: ALLOW
+    - action: create
+      effect: ALLOW
+    - action: update
+      effect: DENY
+    - action: delete
+      effect: DENY
+    - action: self
+      effect: ALLOW
+    - action: health_service
+      effect: ALLOW
+    - action: platform_admin
+      effect: ALLOW
+  rules:
+    - description: "Subject can read own access log"
+      effect: ALLOW
+      actions: ["read"]
+      roles: ["self"]
+      condition:
+        match:
+          expr: "request.resource.attr.accessor_id == request.principal.id"
+    - description: "Health service full access"
+      effect: ALLOW
+      actions: ["read", "create"]
+      roles: ["health_service"]
+    - description: "Platform admin full access"
+      effect: ALLOW
+      actions: ["read", "create"]
+      roles: ["platform_admin"]

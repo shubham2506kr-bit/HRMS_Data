@@ -1,0 +1,40 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git ls-remote *)",
+      "WebFetch(domain:github.com)",
+      "Bash(npm --version)",
+      "Bash(git --version)",
+      "Read(//c/Users/Mr X 👿💀/.claude/**)",
+      "Read(//c/Users/Mr X 👿💀/.claude/plugins/**)",
+      "Bash(curl -s \"https://api.github.com/repos/nextlevelbuilder/ui-ux-pro-max-skill/contents/.claude/skills\")",
+      "Bash(curl -s \"https://api.github.com/repos/nextlevelbuilder/ui-ux-pro-max-skill/contents/.claude/skills/ui-ux-pro-max\")",
+      "Read(//tmp/uipm-src/.claude/**)",
+      "Read(//tmp/uipm-src/**)",
+      "Bash(mkdir -p 'C:\\\\Users\\\\Mr X 👿💀/.claude/skills')",
+      "Bash(cp -r /tmp/uipm-src/.claude/skills/. 'C:\\\\Users\\\\Mr X 👿💀/.claude/skills/')",
+      "Bash(python scripts/search.py \"beauty spa wellness\" --design-system -p \"Serenity Spa\")",
+      "Bash(python scripts/validate_data.py)",
+      "Bash(python scripts/search.py \"dashboard analytics\" --domain style)",
+      "Bash(python -m pytest scripts/tests -q)",
+      "Bash(python scripts/search.py \"hrms employee dashboard\" --design-system -p \"HRMS\" -f markdown)",
+      "Bash(python scripts/search.py \"professional enterprise\" --domain typography)",
+      "Bash(python scripts/search.py \"table\" --stack react)",
+      "Bash(python scripts/search.py \"state management\" --stack react)",
+      "Bash(python scripts/search.py \"form validation\" --domain ux)",
+      "Bash(npm view *)",
+      "Bash(claude --version)",
+      "Bash(claude mcp *)",
+      "Bash(npm search *)",
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); [print\\(p['name'], p.get\\('version'\\), '-', \\(p.get\\('description'\\) or ''\\)[:80]\\) for p in d]\")",
+      "WebFetch(domain:21st.dev)",
+      "Bash(tar xzf *)",
+      "Bash(python -c ' *)",
+      "Bash(curl -s -o /tmp/mcp_test.json -w 'HTTP %{http_code}\\\\n' -X POST https://21st.dev/api/mcp -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -H 'x-api-key: 21st_sk_cf87cf45d093dc23294441726239dca534a6c3a6ddd95982b6ca739debf14b31' -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"probe\",\"version\":\"1.0\"}}}')",
+      "Bash(curl -s -o /tmp/t.json -w \"HTTP %{http_code}\\\\n\" -X POST \"https://21st.dev/api/mcp\" -H \"Content-Type: application/json\" -H \"Accept: application/json, text/event-stream\" -H \"x-api-key: 21st_sk_cf87cf45d093dc23294441726239dca534a6c3a6ddd95982b6ca739debf14b31\" -d '{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}')",
+      "Bash(git init *)",
+      "Bash(git add *)",
+      "Bash(grep -iE \"\\\\.env|\\\\.log$\")"
+    ]
+  }
+}

@@ -1,0 +1,148 @@
+﻿edurankai-hrms@1.0.0 E:\HRMS_Data\backend
++-- @fastify/cors@10.1.0
+| +-- fastify-plugin@5.1.0 deduped
+| `-- mnemonist@0.40.0
++-- @fastify/helmet@13.1.0
+| +-- fastify-plugin@6.0.0
+| `-- helmet@8.3.0
++-- @fastify/rate-limit@10.3.0
+| +-- @lukeed/ms@2.0.2
+| +-- fastify-plugin@5.1.0 deduped
+| `-- toad-cache@3.7.4
++-- @fastify/swagger-ui@5.2.6
+| +-- @fastify/static@9.3.0
+| +-- fastify-plugin@5.1.0 deduped
+| +-- openapi-types@12.1.3
+| +-- rfdc@1.4.1
+| `-- yaml@2.9.0
++-- @fastify/swagger@9.8.1
+| +-- fastify-plugin@6.0.0
+| +-- json-schema-resolver@3.0.0
+| +-- openapi-types@12.1.3 deduped
+| +-- rfdc@1.4.1 deduped
+| `-- yaml@2.9.0 deduped
++-- agent-base@6.0.2 extraneous
+| `-- debug@4.4.3
++-- asynckit@0.4.0 extraneous
++-- axios@1.19.0 extraneous
+| +-- follow-redirects@1.16.0 deduped
+| +-- form-data@4.0.6 deduped
+| +-- https-proxy-agent@5.0.1 deduped
+| `-- proxy-from-env@2.1.0 deduped
++-- bcryptjs@3.0.3
++-- call-bind-apply-helpers@1.0.2 extraneous
+| +-- es-errors@1.3.0 deduped
+| `-- function-bind@1.1.2 deduped
++-- combined-stream@1.0.8 extraneous
+| `-- delayed-stream@1.0.0 deduped
++-- date-fns-tz@3.2.0
+| `-- date-fns@4.4.0 deduped
++-- date-fns@4.4.0
++-- delayed-stream@1.0.0 extraneous
++-- dotenv@16.6.1
++-- dunder-proto@1.0.1 extraneous
+| +-- call-bind-apply-helpers@1.0.2 deduped
+| +-- es-errors@1.3.0 deduped
+| `-- gopd@1.2.0 deduped
++-- es-define-property@1.0.1 extraneous
++-- es-errors@1.3.0 extraneous
++-- es-object-atoms@1.1.2 extraneous
+| `-- es-errors@1.3.0 deduped
++-- es-set-tostringtag@2.1.0 extraneous
+| +-- es-errors@1.3.0 deduped
+| +-- get-intrinsic@1.3.0 deduped
+| +-- has-tostringtag@1.0.2 deduped
+| `-- hasown@2.0.4 deduped
++-- fastify-plugin@5.1.0
++-- fastify@5.12.0
+| +-- @fastify/ajv-compiler@4.0.6
+| +-- @fastify/error@4.2.0
+| +-- @fastify/fast-json-stringify-compiler@5.1.0
+| +-- @fastify/proxy-addr@5.1.0
+| +-- abstract-logging@2.0.1
+| +-- avvio@9.3.0
+| +-- fast-json-stringify@7.0.1
+| +-- find-my-way@9.8.0
+| +-- light-my-request@6.6.0
+| +-- pino@9.14.0 deduped
+| +-- process-warning@5.1.0
+| +-- rfdc@1.4.1 deduped
+| +-- secure-json-parse@4.1.0
+| +-- semver@7.8.5
+| `-- toad-cache@3.7.4 deduped
++-- follow-redirects@1.16.0 extraneous
++-- form-data@4.0.6 extraneous
+| +-- asynckit@0.4.0 deduped
+| +-- combined-stream@1.0.8 deduped
+| +-- es-set-tostringtag@2.1.0 deduped
+| +-- hasown@2.0.4 deduped
+| `-- mime-types@2.1.35 deduped
++-- function-bind@1.1.2 extraneous
++-- get-intrinsic@1.3.0 extraneous
+| +-- call-bind-apply-helpers@1.0.2 deduped
+| +-- es-define-property@1.0.1 deduped
+| +-- es-errors@1.3.0 deduped
+| +-- es-object-atoms@1.1.2 deduped
+| +-- function-bind@1.1.2 deduped
+| +-- get-proto@1.0.1 deduped
+| +-- gopd@1.2.0 deduped
+| +-- has-symbols@1.1.0 deduped
+| +-- hasown@2.0.4 deduped
+| `-- math-intrinsics@1.1.0 deduped
++-- get-proto@1.0.1 extraneous
+| +-- dunder-proto@1.0.1 deduped
+| `-- es-object-atoms@1.1.2 deduped
++-- gopd@1.2.0 extraneous
++-- has-symbols@1.1.0 extraneous
++-- has-tostringtag@1.0.2 extraneous
+| `-- has-symbols@1.1.0 deduped
++-- hasown@2.0.4 extraneous
+| `-- function-bind@1.1.2 deduped
++-- https-proxy-agent@5.0.1 extraneous
+| +-- agent-base@6.0.2 deduped
+| `-- debug@4.4.3 deduped
++-- jose@5.10.0
++-- math-intrinsics@1.1.0 extraneous
++-- mime-db@1.52.0 extraneous
++-- mime-types@2.1.35 extraneous
+| `-- mime-db@1.52.0 deduped
++-- pg-pool@3.14.0
+| `-- pg@8.23.0 deduped
++-- pg@8.23.0
+| +-- pg-cloudflare@1.4.0
+| +-- pg-connection-string@2.14.0
+| +-- UNMET OPTIONAL DEPENDENCY pg-native@>=3.0.1
+| +-- pg-pool@3.14.0 deduped
+| +-- pg-protocol@1.16.0
+| +-- pg-types@2.2.0
+| `-- pgpass@1.0.5
++-- pino-pretty@13.1.3
+| +-- colorette@2.0.20
+| +-- dateformat@4.6.3
+| +-- fast-copy@4.0.4
+| +-- fast-safe-stringify@2.1.1
+| +-- help-me@5.0.0
+| +-- joycon@3.1.1
+| +-- minimist@1.2.8
+| +-- on-exit-leak-free@2.1.2
+| +-- pino-abstract-transport@3.0.0
+| +-- pump@3.0.4
+| +-- secure-json-parse@4.1.0 deduped
+| +-- sonic-boom@4.2.1
+| `-- strip-json-comments@5.0.3
++-- pino@9.14.0
+| +-- @pinojs/redact@0.4.0
+| +-- atomic-sleep@1.0.0
+| +-- on-exit-leak-free@2.1.2 deduped
+| +-- pino-abstract-transport@2.0.0
+| +-- pino-std-serializers@7.1.0
+| +-- process-warning@5.1.0 deduped
+| +-- quick-format-unescaped@4.0.4
+| +-- real-require@0.2.0
+| +-- safe-stable-stringify@2.5.0
+| +-- sonic-boom@4.2.1 deduped
+| `-- thread-stream@3.2.0
++-- proxy-from-env@2.1.0 extraneous
++-- uuid@10.0.0
+`-- zod@3.25.76
+

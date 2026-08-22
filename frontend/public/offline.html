@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Offline · EduRankAI HumanOS</title>
+    <style>
+      body { margin: 0; background: #F7F3EC; color: #171411; font-family: Inter, system-ui, sans-serif; display: grid; place-items: center; min-height: 100vh; }
+      main { text-align: center; max-width: 30rem; padding: 2rem; }
+      .ring { width: 72px; height: 72px; margin: 0 auto 1.5rem; }
+      h1 { font-family: Fraunces, Georgia, serif; font-size: 1.5rem; font-weight: 500; margin: 0 0 0.5rem; }
+      p { color: #6F675C; font-size: 0.875rem; line-height: 1.6; margin: 0 0 1.5rem; }
+      a { color: #FF5A1F; font-weight: 600; font-size: 0.875rem; text-decoration: none; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <svg class="ring" viewBox="0 0 512 512" aria-hidden="true">
+        <circle cx="256" cy="236" r="150" fill="none" stroke="#171411" stroke-width="10"/>
+        <circle cx="256" cy="236" r="150" fill="none" stroke="#FF5A1F" stroke-width="26" stroke-dasharray="240 703" stroke-linecap="round" transform="rotate(-90 256 236)"/>
+        <circle cx="256" cy="236" r="64" fill="#171411"/>
+      </svg>
+      <h1>You are offline</h1>
+      <p>
+        The HumanOS shell is cached on this device. When the connection returns, your data refreshes automatically —
+        nothing you send while offline is lost.
+      </p>
+      <a href="/dashboard">Try reconnecting</a>
+    </main>
+  </body>
+</html>
