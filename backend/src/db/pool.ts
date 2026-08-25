@@ -1,23 +1,40 @@
 import { Pool, PoolConfig, PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { config } from '../config/index.js';
-import { getRequestContext } from '../lib/requestContext.js';
+import { getExecutionContext, isServiceContext } from '../lib/requestContext.js';
 
 /**
  * Identity-aware database access layer.
  *
- * Every request-scoped statement runs with two PostgreSQL settings applied:
- *   app.person_id  the caller's health.persons.logical_id
- *   app.roles      the caller's roles, comma-delimited AND comma-wrapped
+ * Every request-scoped statement runs with three PostgreSQL settings applied:
+ *   app.person_id       the caller's health.persons.logical_id, '' if none
+ *   app.roles           the caller's roles, comma-delimited AND comma-wrapped
+ *   app.service_context 'on' for background work only, '' for everything else
  *
- * The row-level security policies in migrations/033_rls_and_grants.sql read
- * those settings through health.fn_current_person() and health.fn_has_role().
- * Nothing here interpolates an identity into SQL text: both settings are
- * applied with set_config() over bound parameters, so a role name or person id
- * can never terminate a literal.
+ * The row-level security policies in migrations/033_rls_and_grants.sql read the
+ * first two through health.fn_current_person() and health.fn_has_role(); the
+ * third is read by health.fn_is_service_context() (migration 042). Nothing here
+ * interpolates an identity into SQL text: all three are applied with set_config()
+ * over bound parameters, so a role name or person id can never terminate a
+ * literal.
  *
- * Statements issued with no request context (migrations, the scheduler, startup
- * probes, anything under runAsSystem) take the plain pool path and set nothing,
- * which leaves app.person_id NULL. See migration 033 for what that means.
+ * THE THREE STATES, AND WHY THE THIRD ONE HAD TO BECOME VISIBLE:
+ *
+ *  1. An authenticated request — person id set, roles set, service unset.
+ *  2. Background work under runAsSystem — person id empty, service 'on'.
+ *  3. Anything else (startup probes, migrations, tests) — no settings applied,
+ *     so app.person_id reads NULL and every policy that requires a person
+ *     denies. That is the correct default and it stays.
+ *
+ * States 2 and 3 used to be the same state. Both were "no context", both took
+ * the plain pool path, both set nothing. So a scheduled job and an
+ * unauthenticated caller were indistinguishable to a policy, and the only way to
+ * let the scheduler write was to let everyone write. State 2 now announces
+ * itself, which is what allows a policy to admit the scheduler by name without
+ * widening anything for state 3.
+ *
+ * The settings are always applied as a set of three, never individually: a
+ * partial apply would let one caller's app.service_context survive on a pooled
+ * connection into the next caller's statement.
  */
 
 const poolConfig: PoolConfig = {
@@ -33,11 +50,20 @@ export const pool = new Pool(poolConfig);
 
 const SETTING_PERSON = 'app.person_id';
 const SETTING_ROLES = 'app.roles';
+const SETTING_SERVICE = 'app.service_context';
 
 /** Transaction-local: discarded automatically by COMMIT or ROLLBACK. */
-const APPLY_LOCAL = 'SELECT set_config($1, $2, true), set_config($3, $4, true)';
+const APPLY_LOCAL =
+  'SELECT set_config($1, $2, true), set_config($3, $4, true), set_config($5, $6, true)';
 /** Session-local: survives a caller's own BEGIN/COMMIT. Must be reset on release. */
-const APPLY_SESSION = 'SELECT set_config($1, $2, false), set_config($3, $4, false)';
+const APPLY_SESSION =
+  'SELECT set_config($1, $2, false), set_config($3, $4, false), set_config($5, $6, false)';
+
+/** All three settings, in the order APPLY_LOCAL / APPLY_SESSION bind them. */
+type IdentityParams = [string, string, string, string, string, string];
+
+/** Every setting blanked. Used to scrub a session-scoped client before release. */
+const CLEARED: IdentityParams = [SETTING_PERSON, '', SETTING_ROLES, '', SETTING_SERVICE, ''];
 
 /**
  * `,self,employee,hr_generalist,` — the wrapping commas are load-bearing. A
@@ -52,12 +78,26 @@ function encodeRoles(roles: readonly string[] | undefined): string {
   return `,${clean.join(',')},`;
 }
 
-/** Settings for the live caller, or null when there is no identity to apply. */
-function identityParams(): [string, string, string, string] | null {
+/**
+ * Settings for the live caller, or null when there is nothing to declare and the
+ * plain pool path should be taken.
+ *
+ * Returns non-null in two cases: an authenticated request, and background work.
+ * The service branch sends an empty person id on purpose — a job has no acting
+ * person, and fn_current_person() must keep returning NULL for it. What changes
+ * is that app.service_context says the emptiness is intentional.
+ */
+function identityParams(): IdentityParams | null {
   if (!config.DB_RLS_ENABLED) return null;
-  const ctx = getRequestContext();
-  if (!ctx || typeof ctx.personId !== 'string' || ctx.personId.length === 0) return null;
-  return [SETTING_PERSON, ctx.personId, SETTING_ROLES, encodeRoles(ctx.roles)];
+  const ctx = getExecutionContext();
+  if (ctx === undefined) return null;
+
+  if (isServiceContext(ctx)) {
+    return [SETTING_PERSON, '', SETTING_ROLES, encodeRoles([]), SETTING_SERVICE, 'on'];
+  }
+
+  if (typeof ctx.personId !== 'string' || ctx.personId.length === 0) return null;
+  return [SETTING_PERSON, ctx.personId, SETTING_ROLES, encodeRoles(ctx.roles), SETTING_SERVICE, ''];
 }
 
 /**
@@ -121,11 +161,12 @@ export async function query<T extends QueryResultRow = any>(
  * survives an arbitrary number of caller-managed transactions, including a
  * ROLLBACK (RESET/SET LOCAL semantics do not apply to a plain session setting).
  *
- * That makes the connection stateful, so the wrapped release() clears both
+ * That makes the connection stateful, so the wrapped release() clears all three
  * settings before the client returns to the pool, and checkout re-applies them
  * unconditionally — empty strings when there is no context. Both halves matter:
- * without the reset a background job could inherit a request's identity; without
- * the unconditional re-apply a stale value could survive a failed reset.
+ * without the reset a background job could inherit a request's identity, or a
+ * request could inherit a job's app.service_context; without the unconditional
+ * re-apply a stale value could survive a failed reset.
  * If the reset itself fails the client is destroyed rather than returned, since
  * its identity is then unknown.
  */
@@ -137,10 +178,7 @@ export async function getClient(): Promise<PoolClient> {
   if (config.DB_RLS_ENABLED) {
     const identity = identityParams();
     try {
-      await (originalQuery as any)(
-        APPLY_SESSION,
-        identity ?? [SETTING_PERSON, '', SETTING_ROLES, '']
-      );
+      await (originalQuery as any)(APPLY_SESSION, identity ?? CLEARED);
     } catch (error) {
       release(true as any);
       throw error;
@@ -160,7 +198,7 @@ export async function getClient(): Promise<PoolClient> {
     // this caller's identity. Callers do not await release(), by design.
     void (async () => {
       try {
-        await (originalQuery as any)(APPLY_SESSION, [SETTING_PERSON, '', SETTING_ROLES, '']);
+        await (originalQuery as any)(APPLY_SESSION, CLEARED);
         release();
       } catch {
         release(true as any);

@@ -1,7 +1,9 @@
 import Fastify from 'fastify';
+import { ZodError } from 'zod';
 import { config } from './config/index.js';
 import { closePool, healthCheck, query } from './db/pool.js';
-import { cerbos } from './authz/cerbos.js';
+import { AuditWriteError } from './lib/audit.js';
+import { cerbos, checkCerbosHealth } from './authz/cerbos.js';
 import { isPrivileged } from './lib/access.js';
 import { authenticate } from './authz/middleware.js';
 import { runAllJobs } from './lib/jobs.js';
@@ -81,15 +83,31 @@ if (config.NODE_ENV !== 'production') {
 // Health check
 app.get('/health', async () => {
   const dbHealthy = await healthCheck();
-  const cerbosHealthy = await checkCerbosHealth();
+  const authz = await checkCerbosHealth();
+
+  // Cerbos is deliberately absent from this deployment: no client is
+  // implemented, and policies/ is not valid Cerbos policy. Authorization is
+  // enforced by lib/access.ts and row-level security, not by a policy engine.
+  //
+  // So its absence is NOT a degradation, and reporting one would keep this
+  // endpoint permanently red for an expected condition — which trains
+  // operators to ignore it. It IS a degradation when CERBOS_ENABLED is on,
+  // because then a control is configured that does not exist behind it.
+  //
+  // What this must never do is report 'healthy'. The previous local stub was
+  // `try { return true } catch { return false }` and answered "healthy" without
+  // opening a socket; monitoring believed a policy engine was in place, which
+  // is exactly the condition that stops anyone from looking.
+  const authzMisconfigured = authz.status === 'misconfigured';
 
   return {
-    status: dbHealthy && cerbosHealthy ? 'ok' : 'degraded',
+    status: dbHealthy && !authzMisconfigured ? 'ok' : 'degraded',
     timestamp: new Date().toISOString(),
     services: {
       database: dbHealthy ? 'healthy' : 'unhealthy',
-      cerbos: cerbosHealthy ? 'healthy' : 'unhealthy',
+      cerbos: authz.status,
     },
+    ...(authzMisconfigured ? { detail: authz.detail } : {}),
   };
 });
 
@@ -165,20 +183,92 @@ app.register(async (app) => {
 });
 
 // Error handler
-app.setErrorHandler((error: any, _request, reply) => {
-  console.error('Error:', error);
-  
-  if (error.validation) {
+//
+// Three things were wrong here and all three were silent:
+//
+//  1. Routes validate with zod's schema.parse(), which throws ZodError. Only
+//     Fastify's own error.validation was handled, so every malformed request
+//     body fell through to 500 — an input error reported as a server fault.
+//  2. AuditWriteError already declares statusCode 503 (audit is fail-closed:
+//     the operation was REFUSED because it could not be recorded, and nothing
+//     was changed). That was flattened to 500, which reads as "we broke" rather
+//     than "retry", and hid the one failure an operator must react to.
+//  3. `console.error('Error:', error)` logged the raw object. A pg error's
+//     `detail` quotes the failing row — salary, clinical free text, national id
+//     — and this handler sees every error in the process. That is the same
+//     leak the query logger is careful to avoid by recording only
+//     { duration, rows }.
+app.setErrorHandler((error: any, request, reply) => {
+  const isZod = error instanceof ZodError || error?.name === 'ZodError';
+  const isAudit = error instanceof AuditWriteError || error?.name === 'AuditWriteError';
+  const status: number =
+    isZod ? 400
+    : isAudit ? 503
+    : error?.validation ? 400
+    : typeof error?.statusCode === 'number' && error.statusCode >= 400 && error.statusCode < 600
+      ? error.statusCode
+      : 500;
+
+  // Identity of the failure, never its contents. The route PATTERN, not the
+  // resolved url, because the url carries person ids.
+  console.error('Request failed', {
+    requestId: request.id,
+    method: request.method,
+    route: request.routeOptions?.url ?? 'unrouted',
+    status,
+    name: error?.name ?? 'Error',
+    code: error?.code ?? null,
+    ...(isAudit
+      ? { auditAction: error.action, attempts: error.attempts, persistedToFallback: error.persistedToFallback }
+      : {}),
+  });
+  // The stack is safe (no data) and is what makes a 500 diagnosable.
+  if (status >= 500 && typeof error?.stack === 'string') console.error(error.stack);
+
+  if (isZod) {
     return reply.code(400).send({
-      error: 'Validation Error',
+      error: 'VALIDATION_ERROR',
+      message: 'The request is not valid.',
+      // Field path and failure kind only. Never the rejected value: that is the
+      // caller's data and may be a salary or a clinical note.
+      details: (error.issues ?? []).map((i: any) => ({
+        path: Array.isArray(i.path) ? i.path.join('.') : String(i.path ?? ''),
+        code: i.code,
+        message: i.message,
+      })),
+    });
+  }
+
+  if (isAudit) {
+    return reply
+      .code(503)
+      .header('Retry-After', '5')
+      .send({
+        error: 'AUDIT_UNAVAILABLE',
+        message:
+          'The action was refused because it could not be written to the audit trail. ' +
+          'Nothing was changed. Please retry.',
+      });
+  }
+
+  if (error?.validation) {
+    return reply.code(400).send({
+      error: 'VALIDATION_ERROR',
       message: error.message,
       details: error.validation,
     });
   }
-  
-  return reply.code(500).send({
-    error: 'Internal Server Error',
-    message: config.NODE_ENV === 'development' ? error.message : 'Internal server error',
+
+  // A 4xx raised deliberately by a route or plugin keeps its own message; a 5xx
+  // reveals nothing outside development.
+  return reply.code(status).send({
+    error: status >= 500 ? 'Internal Server Error' : (error?.error ?? 'Request Failed'),
+    message:
+      status < 500
+        ? (error?.message ?? 'Request failed')
+        : config.NODE_ENV === 'development'
+          ? error?.message
+          : 'Internal server error',
   });
 });
 
@@ -210,15 +300,6 @@ async function start() {
   } catch (err) {
     console.error('Failed to start server:', err);
     process.exit(1);
-  }
-}
-
-async function checkCerbosHealth(): Promise<boolean> {
-  try {
-    // Simple health check - could ping Cerbos
-    return true;
-  } catch {
-    return false;
   }
 }
 

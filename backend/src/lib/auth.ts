@@ -33,7 +33,23 @@ type DerivedRoleRow = {
   is_head: boolean;
   is_manager: boolean;
   idp_issuers: string[] | null;
+  granted_roles: string[] | null;
 };
+
+/**
+ * Roles that are facts about employment and org structure, computed here from
+ * live data. They must never come from a grant: a granted `employee` would
+ * assert an employment the database contradicts, and every check that reads
+ * health.employments would be bypassed. health.roles.is_grantable is FALSE for
+ * exactly these, and a trigger enforces it, so this list is a second line of
+ * defence rather than the only one.
+ */
+const DERIVED_ONLY_ROLES: ReadonlySet<string> = new Set([
+  'self',
+  'employee',
+  'department_head_of',
+  'direct_manager_of',
+]);
 
 /**
  * Derive a person's roles from live data — the capability spine.
@@ -41,6 +57,17 @@ type DerivedRoleRow = {
  * Roles are never carried in the access token: they are read from the database
  * on every request (behind a short cache in authz/middleware.ts) so that a
  * revoked or downgraded privilege takes effect immediately.
+ *
+ * Three sources, in order of trust:
+ *   1. facts about the person's employment and place in the org structure;
+ *   2. explicit, audited grants in health.person_roles (migration 041);
+ *   3. the idp_issuer stopgap map above.
+ *
+ * Source 2 did not exist until migration 041, and without it most of the role
+ * vocabulary was unreachable: PRIVILEGED_ROLES lists nine names but only
+ * hr_generalist could be held, and canRunPayroll() — which requires finance,
+ * payroll, hr_manager, leadership or senior_admin — could never return true for
+ * anyone, so no payroll run could be created, approved or paid.
  */
 export async function deriveRoles(personId: string): Promise<string[]> {
   const result = await query<DerivedRoleRow>(
@@ -57,7 +84,14 @@ export async function deriveRoles(personId: string): Promise<string[]> {
                WHERE e.person_id = $1 AND e.status = 'ACTIVE' AND e.system_period @> NOW()) AS is_manager,
        (SELECT COALESCE(ARRAY_AGG(DISTINCT ua.idp_issuer), '{}'::TEXT[])
           FROM health.user_accounts ua
-         WHERE ua.person_id = $1 AND ua.is_active) AS idp_issuers`,
+         WHERE ua.person_id = $1 AND ua.is_active) AS idp_issuers,
+       -- Explicit grants (migration 041). Guarded with to_regprocedure so this
+       -- query still runs against a database where 041 has not been applied:
+       -- the live schema was built by hand and its true state is not known.
+       CASE WHEN to_regprocedure('health.fn_granted_roles(uuid)') IS NULL
+            THEN '{}'::TEXT[]
+            ELSE health.fn_granted_roles($1)
+       END AS granted_roles`,
     [personId]
   );
 
@@ -66,6 +100,14 @@ export async function deriveRoles(personId: string): Promise<string[]> {
   if (r?.is_employee) roles.add('employee');
   if (r?.is_head) roles.add('department_head_of');
   if (r?.is_manager) roles.add('direct_manager_of');
+
+  // Explicit grants. Filtered against DERIVED_ONLY_ROLES so that even a grant
+  // written directly into the table by an operator cannot forge an employment.
+  for (const role of r?.granted_roles ?? []) {
+    const name = role.trim();
+    if (name === '' || DERIVED_ONLY_ROLES.has(name)) continue;
+    roles.add(name);
+  }
 
   for (const issuer of r?.idp_issuers ?? []) {
     const granted = ISSUER_ROLE_GRANTS.get(issuer.trim().toLowerCase());

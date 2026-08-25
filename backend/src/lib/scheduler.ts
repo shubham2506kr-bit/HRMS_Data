@@ -206,10 +206,11 @@ async function readJobRow(job: JobDefinition): Promise<SchedulerJobRow | null> {
  * same second cannot both run the same job. NEVER_RUN is preserved until a job
  * first executes; it is not "overdue".
  *
- * Every query here runs inside `runAsSystem`: background work has no request
- * context, so the row-level-security settings the pool sets per request are
- * absent by design. The scheduler's database role must therefore be permitted
- * to see these tables (BYPASSRLS or explicit policies) — see the report.
+ * Every query here runs inside `runAsSystem`, which sets app.service_context
+ * instead of a person identity. Policies that are meant to admit the scheduler
+ * test health.fn_is_service_context() (migration 042); the scheduler's database
+ * role does NOT bypass RLS, so a table with no such clause stays closed to it.
+ * If a job starts silently processing zero rows, that is the first thing to check.
  */
 export async function runJob(job: JobDefinition, options?: RunJobOptions): Promise<void> {
   if (inFlight.has(job.name)) {
@@ -275,7 +276,7 @@ export async function runJob(job: JobDefinition, options?: RunJobOptions): Promi
     } finally {
       inFlight.delete(job.name);
     }
-  });
+  }, job.name);
 }
 
 /**
@@ -291,5 +292,5 @@ export async function markJobsBlocked(reason: string): Promise<void> {
     ).catch((e: unknown) =>
       console.error('[JOB-FAILURE] blocked marker failed:', e instanceof Error ? e.message : String(e))
     );
-  });
+  }, 'markJobsBlocked');
 }

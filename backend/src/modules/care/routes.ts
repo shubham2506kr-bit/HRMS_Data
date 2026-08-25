@@ -27,12 +27,11 @@
 // retention and audit.
 
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { query } from '../../db/pool.js';
+import { query, getClient } from '../../db/pool.js';
 import { authenticate } from '../../authz/middleware.js';
 import { writeAudit } from '../../lib/audit.js';
 import { emitEvent } from '../../lib/events.js';
 import { config } from '../../config/index.js';
-import { canActOnBehalfOf } from '../../lib/access.js';
 import { z } from 'zod';
 import { buildAdvisorResponse, matchTopics as matchTopicsFn, DISCLAIMER } from './intents.js';
 import { CareSession, buildTurn } from './agent.js';
@@ -61,6 +60,37 @@ const CONSENTABLE_PURPOSES = [
 ] as const;
 
 /**
+ * Legacy request vocabulary. The UI posts { domain: 'women_care' }, but the
+ * consent gate reads health.health_consents by purpose_code, so a free-text
+ * domain has to be resolved to a purpose before anything is written. Anything
+ * not in this table is refused: that is what stops CLINICAL_REVIEW — absent
+ * from CONSENTABLE_PURPOSES on purpose, because it authorises someone ELSE to
+ * read your health record — from being self-granted through a string field.
+ */
+const CONSENT_DOMAINS: ReadonlyArray<{ domain: string; purpose: PurposeCode; aliases?: string[] }> = [
+  { domain: 'women_care', purpose: PURPOSE.WOMENS_CARE, aliases: ['womens_care', 'women'] },
+  { domain: 'advisory', purpose: PURPOSE.ADVISORY, aliases: ['care_advisory'] },
+  { domain: 'advisory_history', purpose: PURPOSE.ADVISORY_HISTORY },
+  { domain: 'safety_checkin', purpose: PURPOSE.SAFETY_CHECKIN, aliases: ['safety'] },
+];
+
+/** Resolve a caller-supplied domain (or purpose code) to a consentable purpose. */
+function resolveConsentPurpose(raw: string): PurposeCode | null {
+  const needle = raw.trim().toLowerCase();
+  const direct = CONSENTABLE_PURPOSES.find((p) => p.toLowerCase() === needle);
+  if (direct) return direct;
+  const entry = CONSENT_DOMAINS.find(
+    (d) => d.domain === needle || (d.aliases ?? []).includes(needle)
+  );
+  return entry ? entry.purpose : null;
+}
+
+/** Answer in the vocabulary the UI speaks. */
+function domainOfPurpose(purpose: string): string {
+  return CONSENT_DOMAINS.find((d) => d.purpose === purpose)?.domain ?? purpose;
+}
+
+/**
  * Roles that may see another person's clinical free text. This is NOT
  * PRIVILEGED_ROLES / isPrivileged(): hr_generalist, leadership, finance and
  * auditor are privileged for employment records and must stay blind to health
@@ -68,13 +98,14 @@ const CONSENTABLE_PURPOSES = [
  */
 export const CLINICAL_ROLES = ['care_clinician', 'occupational_health'] as const;
 
-function isClinicalRole(roles: readonly string[]): boolean {
+export function isClinicalRole(roles: readonly string[]): boolean {
   return roles.some((r) => (CLINICAL_ROLES as readonly string[]).includes(r));
 }
 
 // Smallest group that may be reported in an aggregate view; below this a count
-// re-identifies an individual.
-const MIN_AGGREGATE_GROUP = 5;
+// re-identifies an individual. No aggregate endpoint exists yet; this is the
+// threshold any future one must apply, so it is exported rather than inlined.
+export const MIN_AGGREGATE_GROUP = 5;
 
 
 // Sessionful care-agent conversations, keyed per person. Sessions are
@@ -239,8 +270,6 @@ async function auditHealthAccess(args: {
 
 // --- Shared validation ----------------------------------------------------
 
-const uuidSchema = z.string().uuid();
-
 /** Every list endpoint is capped; an uncapped list of health rows is an export. */
 const paginationSchema = z
   .object({
@@ -248,8 +277,6 @@ const paginationSchema = z
     offset: z.coerce.number().int().min(0).max(10_000).default(0),
   })
   .strict();
-
-const idParamSchema = z.object({ id: uuidSchema }).strict();
 
 /** request.user is set by authenticate(); narrow it once, explicitly. */
 function actorOf(request: FastifyRequest): { personId: string; roles: string[] } {
@@ -576,65 +603,162 @@ export async function careRoutes(app: FastifyInstance) {
   });
 
   // --- Consent (Phase N: women's care domain) ---
-  // Consent is self-managed and revocable. Even when granted, this deployment
-  // stores NO personal health data — it only unlocks WHO public resources.
+  // Consent is self-managed and revocable.
+  //
+  // AUTHORITATIVE TABLE: health.health_consents, keyed by purpose_code. That is
+  // what health.fn_has_valid_consent() — and therefore evaluateConsent() above,
+  // and therefore every gated route in this file — actually reads. An earlier
+  // version of these two handlers read and wrote health.consent_preferences
+  // instead, which the gate never consults, so a grant could not open the gate
+  // and the 403 pointed the employee back at the endpoint that had just failed
+  // them. consent_preferences is left alone: it is not the record of consent.
 
   app.get('/api/care/consent', {
     preHandler: [authenticate()],
     handler: async (request, _reply) => {
-      const result = await query(
-        `SELECT domain, granted_at, revoked_at FROM health.consent_preferences
-         WHERE person_id = $1`,
-        [request.user!.personId]
+      const result = await query<{
+        purpose_code: string;
+        granted_at: string;
+        expires_at: string;
+        revoked_at: string | null;
+      }>(
+        `SELECT purpose_code, granted_at, expires_at, withdrawn_at AS revoked_at
+           FROM health.health_consents
+          WHERE person_id = $1
+            AND withdrawn_at IS NULL
+            AND expires_at > NOW()
+          ORDER BY granted_at DESC`,
+        [actorOf(request).personId]
       );
-      return { consent: result.rows };
+      return {
+        consent: result.rows.map((r) => ({
+          domain: domainOfPurpose(r.purpose_code),
+          purpose: r.purpose_code,
+          granted_at: r.granted_at,
+          expires_at: r.expires_at,
+          revoked_at: r.revoked_at,
+        })),
+      };
     }
   });
 
   app.post('/api/care/consent', {
     preHandler: [authenticate()],
-    handler: async (request) => {
-      const schema = z.object({
-        domain: z.string().min(2).max(60),
-        grant: z.boolean(),
-      });
+    handler: async (request, reply) => {
+      const schema = z
+        .object({
+          purpose: z.string().min(2).max(60).optional(),
+          domain: z.string().min(2).max(60).optional(),
+          grant: z.boolean(),
+        })
+        .strict()
+        .refine((v) => typeof v.purpose === 'string' || typeof v.domain === 'string', {
+          message: 'Send either purpose or domain.',
+        });
       const data = schema.parse(request.body);
 
-      if (data.grant) {
-        await query(
-          `INSERT INTO health.consent_preferences (person_id, domain, granted_at, revoked_at)
-           VALUES ($1, $2, NOW(), NULL)
-           ON CONFLICT (person_id) DO UPDATE
-             SET domain = EXCLUDED.domain, granted_at = NOW(), revoked_at = NULL`,
-          [request.user!.personId, data.domain]
-        );
-      } else {
-        await query(
-          `UPDATE health.consent_preferences SET revoked_at = NOW()
-           WHERE person_id = $1 AND domain = $2 AND revoked_at IS NULL`,
-          [request.user!.personId, data.domain]
-        );
+      // The allowlist is enforced here, not merely documented. A purpose the
+      // employee may not grant themselves never reaches the INSERT.
+      const purpose = resolveConsentPurpose((data.purpose ?? data.domain)!);
+      if (purpose === null) {
+        return reply.code(400).send({
+          error: 'UNKNOWN_CONSENT_PURPOSE',
+          message: `"${data.purpose ?? data.domain}" is not a purpose you can consent to.`,
+          consentable: CONSENTABLE_PURPOSES.map((p) => ({ purpose: p, domain: domainOfPurpose(p) })),
+        });
       }
-      await query(
-        `INSERT INTO health.consent_events (person_id, domain, action)
-         VALUES ($1, $2, $3)`,
-        [request.user!.personId, data.domain, data.grant ? 'GRANT' : 'REVOKE']
-      );
+      const domain = domainOfPurpose(purpose);
+      const actor = actorOf(request);
+
+      // DPDP s.9(3): a minor cannot give this consent themselves. Writing a
+      // SELF row for a minor would be worse than refusing — the gate correctly
+      // ignores it, so the employee would see consent "granted" and still be
+      // denied. Refuse plainly and name the mechanism that does apply.
+      if (data.grant) {
+        const minor = await query<{ is_minor: boolean }>(
+          'SELECT health.fn_person_is_minor($1, $2) AS is_minor',
+          [actor.personId, config.ORG_TIMEZONE]
+        );
+        if (minor.rows[0]?.is_minor === true) {
+          return reply.code(403).send({
+            error: 'PARENTAL_CONSENT_REQUIRED',
+            message:
+              'This consent cannot be given by the employee because they are a minor. ' +
+              'A verified parent or guardian must record it (DPDP Act s.9(3)).',
+            purpose,
+            domain,
+          });
+        }
+      }
+
+      const client = await getClient();
+      try {
+        await client.query('BEGIN');
+
+        // Withdraw whatever is live for this purpose, then append. The ledger is
+        // append-only by intent: superseded rows stay, so the history of who
+        // consented to what and when survives a re-grant.
+        await client.query(
+          `UPDATE health.health_consents SET withdrawn_at = NOW()
+            WHERE person_id = $1 AND purpose_code = $2 AND withdrawn_at IS NULL`,
+          [actor.personId, purpose]
+        );
+
+        if (data.grant) {
+          const inserted = await client.query(
+            `INSERT INTO health.health_consents
+               (person_id, purpose_code, consent_basis, granted_by_person_id, granted_at, expires_at)
+             SELECT $1, pp.purpose_code, 'SELF', $1, NOW(),
+                    NOW() + make_interval(days => pp.default_validity_days)
+               FROM health.processing_purposes pp
+              WHERE pp.purpose_code = $2
+             RETURNING consent_id, expires_at`,
+            [actor.personId, purpose]
+          );
+          if (inserted.rowCount === 0) {
+            // The purpose passed the allowlist but is absent from the registry,
+            // so no validity period can be derived. Do not invent one.
+            await client.query('ROLLBACK');
+            return reply.code(500).send({
+              error: 'PURPOSE_NOT_REGISTERED',
+              message: `Purpose "${purpose}" is not present in health.processing_purposes.`,
+            });
+          }
+        }
+
+        await client.query(
+          `INSERT INTO health.consent_events (person_id, domain, action)
+           VALUES ($1, $2, $3)`,
+          [actor.personId, domain, data.grant ? 'GRANT' : 'REVOKE']
+        );
+
+        await client.query('COMMIT');
+      } catch (error) {
+        try {
+          await client.query('ROLLBACK');
+        } catch {
+          // The connection is already unusable; the outer throw is what matters.
+        }
+        throw error;
+      } finally {
+        client.release();
+      }
+
       await writeAudit({
-        personId: request.user!.personId,
+        personId: actor.personId,
         action: data.grant ? 'CONSENT_GRANT' : 'CONSENT_REVOKE',
         targetType: 'consent',
-        targetId: request.user!.personId,
-        details: { domain: data.domain },
+        targetId: actor.personId,
+        details: { purpose, domain },
         request,
       });
       await emitEvent({
         type: data.grant ? 'ConsentGranted' : 'ConsentRevoked',
         source: 'care:consent',
-        actorPersonId: request.user!.personId,
-        payload: { domain: data.domain },
+        actorPersonId: actor.personId,
+        payload: { purpose, domain },
       });
-      return { granted: data.grant, domain: data.domain };
+      return { granted: data.grant, domain, purpose };
     }
   });
 

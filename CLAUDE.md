@@ -2,6 +2,8 @@
 
 **Read `HANDOFF_TO_CLAUDE_CODE.md` in this directory before doing anything else.** It contains the full audit, what has been changed, what is still broken, and what to verify first. This file is only the short version.
 
+For the daily/weekly clock-out reflections feature, the spec is `docs/REFLECTIONS_SPEC.md`. It is specified but **not built**, and it is blocked behind two things in the handoff: the attendance fix (§8.3) and finishing RLS migration 033 (§8.1). Do not start it before those, and read §3 of the spec before changing any of its decisions — they were made deliberately by the owner.
+
 ## The three facts that will bite you
 
 1. **A large amount of this codebase was rewritten and never compiled or executed.** No `tsc`, no tests, no SQL ever parsed by Postgres. Verify before you build on it.

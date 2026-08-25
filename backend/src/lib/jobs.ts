@@ -283,12 +283,14 @@ export const jobs: JobDefinition[] = [
  * `runJob` records its own failures, so one failing job cannot stop the others.
  *
  * The whole pass runs under `runAsSystem`: there is deliberately no acting person
- * behind a scheduled job, and every query it makes is unscoped by design.
+ * behind a scheduled job. Its queries are not unscoped, though — they carry
+ * app.service_context, which is what lets a policy admit the scheduler without
+ * also admitting an unauthenticated caller (migration 042).
  */
 export async function runAllJobs(): Promise<void> {
   return runAsSystem(async () => {
     for (const job of jobs) {
       await runJob(job);
     }
-  });
+  }, 'runAllJobs');
 }

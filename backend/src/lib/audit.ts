@@ -236,7 +236,7 @@ function sanitiseObject(
   let count = 0;
   for (const [key, value] of Object.entries(input)) {
     if (count >= MAX_KEYS_PER_OBJECT) {
-      out._keys_omitted = Object.keys(input).length - count;
+      out['_keys_omitted'] = Object.keys(input).length - count;
       break;
     }
     count++;
@@ -255,7 +255,7 @@ export function sanitiseAuditDetails(details: Record<string, unknown> | undefine
   const redactions: Redactions = new Map();
   const sanitised = sanitiseObject(details, '', 0, redactions);
   if (redactions.size > 0) {
-    sanitised._redacted = Object.fromEntries(redactions);
+    sanitised['_redacted'] = Object.fromEntries(redactions);
   }
 
   let serialised = safeStringify(sanitised);
@@ -276,7 +276,7 @@ export function sanitiseAuditDetails(details: Record<string, unknown> | undefine
       dropped.push(key);
     }
   }
-  if (dropped.length > 0) trimmed._dropped_keys = dropped;
+  if (dropped.length > 0) trimmed['_dropped_keys'] = dropped;
   return trimmed;
 }
 
@@ -327,7 +327,7 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 // last-resort append-only fallback sink
 // ============================================================
 
-const FALLBACK_DIR = process.env.AUDIT_FALLBACK_DIR ?? join(process.cwd(), 'logs');
+const FALLBACK_DIR = process.env['AUDIT_FALLBACK_DIR'] ?? join(process.cwd(), 'logs');
 const FALLBACK_FILE = join(FALLBACK_DIR, 'audit-fallback.ndjson');
 let fallbackDirReady = false;
 
@@ -390,9 +390,9 @@ export async function writeAudit(entry: AuditEntry): Promise<boolean> {
     : null;
 
   const details = sanitiseAuditDetails(entry.details) ?? {};
-  if (requestId !== null) details._request_id = requestId;
-  if (actor.source === 'context') details._actor_from = 'request_context';
-  if (typeof entry.targetId === 'string' && targetId === null) details._target_ref = entry.targetId.slice(0, 128);
+  if (requestId !== null) details['_request_id'] = requestId;
+  if (actor.source === 'context') details['_actor_from'] = 'request_context';
+  if (typeof entry.targetId === 'string' && targetId === null) details['_target_ref'] = entry.targetId.slice(0, 128);
 
   const failureRecord: Record<string, unknown> = {
     at: new Date().toISOString(),
